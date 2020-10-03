@@ -1,8 +1,8 @@
+import os
 import pymongo
 from pymongo.collection import BulkWriteError
 from seleniumc.chrome import Chrome
 from seleniumc.default import config
-import os
 from datetime import datetime
 
 config['BINARY_PATH'] = os.environ.get('CHROMEDRIVER')
@@ -10,7 +10,10 @@ if config['BINARY_PATH'] is None:
     raise Exception('CHROMEDRIVER path variable not set')
 
 class Generic():
-    def __init__(self):
+    def __init__(self, target):
+        if not target:
+            raise Exception("Please specify a target to scrape")
+
         self.home_path = os.path.dirname(__file__)
         self.c = self.setup()
         self.cli = pymongo.MongoClient('localhost', 27017)
@@ -18,6 +21,22 @@ class Generic():
 
         self.collection = 'solicitations'
         self.db = self.con[self.collection]
+
+        if target == "emma":
+            self.name = "emma"
+            self.tableid = "body_x_grid_grd"
+            self.homepage = 'https://emma.maryland.gov/page.aspx/en/rfp/request_browse_public'
+        else:
+            self.name = "periscope"
+            self.tableid = "resultsTable"
+            self.homepage = 'https://www.commbuys.com/bso/external/publicBids.sdo'
+
+        self.batch_size = 50
+
+        with open(os.path.join(self.home_path, 'scripts', f'{target}_stage1.js'), 'r') as f:
+            self.rip_stage1 = f.read()
+        with open(os.path.join(self.home_path, 'scripts', f'{target}_stage2.js'), 'r') as f:
+            self.rip_stage2 = f.read()
 
     def setup(self):
         c = Chrome(config)
@@ -40,57 +59,31 @@ class Generic():
         doc['datescraped'] = datetime.now().isoformat()
         return pymongo.InsertOne(doc)
 
-    def end_mon(self):
-        self.cli.close()
-
-
-class EMMA(Generic):
-    def __init__(self):
-        super().__init__()
-        self.name = "EMMA"
-
-        with open("./scripts/emma_stage1.js", "r") as f:
-            self.rip_stage1 = f.read()
-        with open("./scripts/emma_stage2.js", "r") as f:
-            self.rip_stage2 = f.read()
-
-        self.homepage = 'https://emma.maryland.gov/page.aspx/en/rfp/request_browse_public'
-        self.batch_size = 50
-        self.c.get(self.home_path)
-        self.to_scrape = None
-
-    #Stage 1 pulls general details from the list view at self.homepage
     def stage1(self):
-        # As a failsafe, we'll use a simple counter to prevent the while loop running forever.
-        current_page = 0
-        max_page = 100
+        self.c.get(self.homepage)
 
         while True:
-            current_page += 1
-            if current_page == max_page:
-                break
-
-            if not self.c.wait_for("body_x_grid_grd"):
+            if not self.c.wait_for(self.tableid):
                 raise Exception("Unable to find the table element")
 
             data = self.c.driver.execute_script(self.rip_stage1)
-            self.bulk_write(data["rfps"])
+            self.bulk_write(data['rfps'])
             self.c.sleep()
-            if not data["next"]:
+            if not data['next']:
                 break
 
     def stage2(self):
         while True:
-            if self.db.count_documents({ "origin": self.name, "complete": False, "error": False }) == 0:
+            if self.db.count_documents({'origin': self.name, 'complete': False, 'error': False}) == 0:
                 break
 
-            for doc in self.db.find({ "origin": self.name, "complete": False }, batch_size=self.batch_size):
+            for doc in self.db.find({'origin': self.name, 'complete': False, 'error': False}, batch_size=self.batch_size):
                 try:
-                    self.c.get(doc["link"])
+                    self.c.get(doc['link'])
                     data = self.c.driver.execute_script(self.rip_stage2)
-                    self.db.update({ "_id": doc["_id"]}, { "$set": data })
+                    self.db.update_one({'_id': doc['_id']}, {'$set': data})
                 except:
-                    self.db.update({ "_id": doc["_id"] }, { "$set": { "error": True }})
+                    self.db.update_one({'_id': doc['_id']}, {'$set': {'error': True}})
 
     def scrape(self):
         try:
@@ -102,5 +95,5 @@ class EMMA(Generic):
         self.c.close()
 
 if __name__ == "__main__":
-    emma = EMMA()
-    emma.scrape()
+    scraper = Generic("periscope")
+    scraper.scrape()

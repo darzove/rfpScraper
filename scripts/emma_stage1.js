@@ -5,7 +5,7 @@ var data = {
 
 $('tr[data-object-type="rfp"]').each((i, elem) => {
 	var entry = {
-		origin: 'EMMA',
+		origin: 'emma',
 		state: 'MD',
 		complete: false,
 		error: false
